@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Babylon.js FEM Binary Visualizer</title>
+    <script src="https://cdn.babylonjs.com/babylon.js"></script>
+    <script src="https://cdn.babylonjs.com/gui/babylon.gui.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        html, body { width: 100%; height: 100%; margin: 0; padding: 0; overflow: hidden; }
+        #renderCanvas { width: 100%; height: 100%; touch-action: none; outline: none; }
+        #uiPanel { position: absolute; top: 1.5rem; left: 1.5rem; z-index: 10; max-height: 90vh; overflow-y: auto; }
+        #uiPanel::-webkit-scrollbar { width: 6px; }
+        #uiPanel::-webkit-scrollbar-thumb { background-color: rgba(156, 163, 175, 0.5); border-radius: 4px; }
+    </style>
+</head>
+<body class="bg-slate-900">
+
+    <canvas id="renderCanvas"></canvas>
+
+    <div id="uiPanel" class="bg-white/95 backdrop-blur-md p-5 rounded-xl shadow-2xl w-80 border border-white/20">
+        <div class="flex items-center justify-between mb-4">
+            <h1 class="text-lg font-bold text-slate-800 tracking-tight">FEM Visualizer <span class="text-blue-600">Bin</span></h1>
+            <div class="h-2 w-2 rounded-full bg-red-500" id="connectionStatus" title="Status"></div>
+        </div>
+        
+        <div class="space-y-4">
+            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <label class="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">1. Load .bin Data</label>
+                <input type="file" id="fileInput" accept=".bin" class="block w-full text-xs text-slate-500 file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-xs file:font-bold file:bg-blue-600 file:text-white hover:file:bg-blue-700 cursor-pointer"/>
+            </div>
+
+            <div class="bg-slate-50 p-3 rounded-lg border border-slate-200 grid grid-cols-2 gap-y-2 text-xs">
+                <div class="text-slate-500 font-medium">Element Size:</div>
+                <div id="statElemSize" class="text-slate-800 font-mono text-right">-</div>
+                <div class="text-slate-500 font-medium">Total Elements:</div>
+                <div id="statTotal" class="text-slate-800 font-mono text-right">0</div>
+                <div class="text-slate-500 font-medium">Visible:</div>
+                <div id="statVisible" class="text-blue-600 font-mono font-bold text-right">0</div>
+            </div>
+
+            <div>
+                <label for="dataFieldSelect" class="block text-xs font-medium text-slate-700 mb-1">Color Field</label>
+                <select id="dataFieldSelect" class="block w-full rounded-md border-slate-300 bg-slate-50 text-slate-700 text-sm p-2 shadow-sm focus:border-blue-500 focus:ring-blue-500">
+                    <option value="density">Density</option>
+                    <option value="l1_stress">L1 Stress Norm (Heatmap)</option>
+                    <option value="ten_comp">Tension / Compression</option>
+                </select>
+            </div>
+
+            <div class="space-y-2">
+                <div class="flex justify-between items-center">
+                    <label class="block text-xs font-medium text-slate-700">Value Range (Abs)</label>
+                    <button id="autoRangeBtn" class="text-[10px] text-blue-600 hover:text-blue-800 font-bold uppercase">Auto</button>
+                </div>
+                <div class="flex gap-2">
+                    <input type="number" id="minVal" value="0.00" step="0.01" class="w-1/2 rounded-md border-slate-300 bg-slate-50 text-xs p-2 font-mono shadow-sm focus:ring-blue-500">
+                    <input type="number" id="maxVal" value="1.00" step="0.01" class="w-1/2 rounded-md border-slate-300 bg-slate-50 text-xs p-2 font-mono shadow-sm focus:ring-blue-500">
+                </div>
+                <button id="applyButton" class="w-full bg-slate-800 text-white text-xs font-bold py-2 px-4 rounded-md hover:bg-slate-700 transition shadow-sm">Update View</button>
+            </div>
+
+            <div>
+                <div class="flex justify-between items-center mb-1">
+                    <label for="densitySlider" class="text-xs font-medium text-slate-700">Density Cutoff</label>
+                    <span id="densityValue" class="text-xs font-mono text-blue-600 bg-blue-50 px-1 rounded">0.00</span>
+                </div>
+                <input type="range" id="densitySlider" min="0" max="1" value="0" step="0.01" class="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+            </div>
+
+            <div class="border-t border-slate-200 pt-3 space-y-2">
+                <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" id="shadowToggle" class="rounded text-blue-600 focus:ring-blue-500 h-4 w-4">
+                    <span class="text-sm text-slate-700">Enable Shadows</span>
+                </label>
+                <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" id="groundToggle" checked class="rounded text-blue-600 focus:ring-blue-500 h-4 w-4">
+                    <span class="text-sm text-slate-700">Show Ground Plane</span>
+                </label>
+                <label class="flex items-center space-x-2 cursor-pointer">
+                    <input type="checkbox" id="backgroundToggle" class="rounded text-blue-600 focus:ring-blue-500 h-4 w-4">
+                    <span class="text-sm text-slate-700">White Background</span>
+                </label>
+            </div>
+            <div id="status" class="text-xs text-slate-400 text-center italic mt-2">Waiting for file...</div>
+        </div>
+    </div>
+
+    <script>
+        // --- UI & Globals ---
+        const canvas = document.getElementById('renderCanvas');
+        const fileInput = document.getElementById('fileInput');
+        const dataFieldSelect = document.getElementById('dataFieldSelect');
+        const minInput = document.getElementById('minVal');
+        const maxInput = document.getElementById('maxVal');
+        const applyButton = document.getElementById('applyButton');
+        const autoRangeBtn = document.getElementById('autoRangeBtn');
+        const statusEl = document.getElementById('status');
+        const densitySlider = document.getElementById('densitySlider');
+        const densityValue = document.getElementById('densityValue');
+        const shadowToggle = document.getElementById('shadowToggle');
+        const backgroundToggle = document.getElementById('backgroundToggle');
+        const groundToggle = document.getElementById('groundToggle');
+
+        // Stats
+        const statElemSize = document.getElementById('statElemSize');
+        const statTotal = document.getElementById('statTotal');
+        const statVisible = document.getElementById('statVisible');
+
+        let engine, scene;
+        
+        // --- DATA STORAGE (Typed Arrays) ---
+        let elementCount = 0;
+        let elemDx = 0.1, elemDy = 0.1, elemDz = 0.1;
+        let centroids = null; // Float32Array
+        let dataDensity = null; // Float32Array
+        let dataL1 = null;      // Float32Array (Now contains signed values)
+        
+        // State
+        let currentField = 'density';
+        let currentMin = 0, currentMax = 1;
+        let densityCutoff = 0.0;
+
+        // Babylon
+        let masterMesh = null;
+        let matrixBuffer = null;
+        let colorBuffer = null;
+        let shadowGenerator = null;
+        let directionLight = null;
+        let ground = null;
+        let mirrorTexture = null;
+
+        // --- Initialization ---
+        function initBabylon() {
+            engine = new BABYLON.Engine(canvas, true);
+            scene = new BABYLON.Scene(engine);
+            scene.clearColor = new BABYLON.Color4(0.08, 0.08, 0.1, 1);
+
+            const camera = new BABYLON.ArcRotateCamera("camera", -Math.PI / 4, Math.PI / 3, 50, BABYLON.Vector3.Zero(), scene);
+            camera.attachControl(canvas, true);
+            camera.wheelPrecision = 20;
+            camera.minZ = 0.1;
+
+            const hemiLight = new BABYLON.HemisphericLight("hemiLight", new BABYLON.Vector3(0, 1, 0), scene);
+            hemiLight.intensity = 0.7;
+
+            directionLight = new BABYLON.DirectionalLight("dirLight", new BABYLON.Vector3(-1, -2, -1), scene);
+            directionLight.position = new BABYLON.Vector3(50, 100, 50);
+            directionLight.intensity = 1.0;
+
+            // --- GROUND WITH MIRROR ---
+            ground = BABYLON.MeshBuilder.CreateGround("ground", {width: 250, height: 250}, scene);
+            const groundMat = new BABYLON.StandardMaterial("groundMat", scene);
+            
+            groundMat.diffuseColor = new BABYLON.Color3(0.05, 0.05, 0.05); 
+            
+            mirrorTexture = new BABYLON.MirrorTexture("mirror", 1024, scene, true);
+            mirrorTexture.mirrorPlane = new BABYLON.Plane(0, -1, 0, -0.1);
+            mirrorTexture.level = 0.6;
+            mirrorTexture.adaptiveBlurKernel = 32; 
+            
+            groundMat.reflectionTexture = mirrorTexture;
+            
+            groundMat.specularColor = new BABYLON.Color3(0.2, 0.2, 0.2);
+            groundMat.specularPower = 128; 
+
+            ground.material = groundMat;
+            ground.position.y = -0.1;
+            ground.receiveShadows = true;
+
+            engine.runRenderLoop(() => scene.render());
+            window.addEventListener('resize', () => engine.resize());
+            document.getElementById('connectionStatus').classList.replace('bg-red-500', 'bg-green-500');
+        }
+
+        // --- Binary Parsing ---
+        fileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) return;
+            
+            statusEl.textContent = 'Reading binary...';
+            const reader = new FileReader();
+            
+            reader.onload = (e) => {
+                try {
+                    const buffer = e.target.result;
+                    const dataView = new DataView(buffer);
+                    let offset = 0;
+
+                    // 1. Read Header
+                    elementCount = dataView.getUint32(offset, true); offset += 4;
+                    elemDx = dataView.getFloat32(offset, true); offset += 4;
+                    elemDy = dataView.getFloat32(offset, true); offset += 4;
+                    elemDz = dataView.getFloat32(offset, true); offset += 4;
+
+                    statTotal.textContent = elementCount.toLocaleString();
+                    statElemSize.textContent = `${elemDx.toFixed(3)}, ${elemDy.toFixed(3)}, ${elemDz.toFixed(3)}`;
+
+                    // 2. Create Views for Data Blocks
+                    centroids = new Float32Array(buffer, offset, elementCount * 3);
+                    offset += elementCount * 3 * 4;
+
+                    dataDensity = new Float32Array(buffer, offset, elementCount);
+                    offset += elementCount * 4;
+
+                    dataL1 = new Float32Array(buffer, offset, elementCount);
+                    offset += elementCount * 4;
+
+                    // 3. Init Scene
+                    initThinInstances();
+                    autoRange();
+                    updateVisuals();
+                    statusEl.textContent = 'Loaded successfully.';
+
+                } catch (err) {
+                    console.error(err);
+                    statusEl.textContent = 'Error parsing binary.';
+                }
+            };
+            
+            reader.readAsArrayBuffer(file);
+        });
+
+        function initThinInstances() {
+            if (masterMesh) masterMesh.dispose();
+
+            const mat = new BABYLON.PBRMaterial("mat", scene);
+            mat.roughness = 0.5;
+            mat.metallic = 0.1;
+            
+            masterMesh = BABYLON.MeshBuilder.CreateBox("box", {
+                width: elemDx, height: elemDy, depth: elemDz
+            }, scene);
+            masterMesh.material = mat;
+
+            // Add to mirror
+            if (mirrorTexture) {
+                if(!mirrorTexture.renderList) mirrorTexture.renderList = [];
+                mirrorTexture.renderList.push(masterMesh);
+            }
+
+            matrixBuffer = new Float32Array(elementCount * 16);
+            colorBuffer = new Float32Array(elementCount * 4);
+
+            masterMesh.thinInstanceRegisterAttribute("color", 4);
+
+            if(elementCount > 0) {
+                const cx = (centroids[0] + centroids[(elementCount-1)*3]) / 2;
+                const cy = (centroids[1] + centroids[(elementCount-1)*3+1]) / 2;
+                const cz = (centroids[2] + centroids[(elementCount-1)*3+2]) / 2;
+                scene.activeCamera.setTarget(new BABYLON.Vector3(cx, cy, cz));
+            }
+        }
+
+        function getCurrentDataArray() {
+            // Both L1 modes use the same array, but process it differently in updateVisuals
+            if (currentField === 'l1_stress' || currentField === 'ten_comp') return dataL1;
+            return dataDensity;
+        }
+
+        function autoRange() {
+            const data = getCurrentDataArray();
+            if (!data) return;
+            let min = Infinity, max = -Infinity;
+            const step = Math.max(1, Math.floor(elementCount / 5000));
+            
+            for(let i=0; i<elementCount; i+=step) {
+                // For range calculation, we always care about magnitude (abs value)
+                // because opacity/intensity depends on magnitude
+                const v = Math.abs(data[i]);
+                if(v < min) min = v;
+                if(v > max) max = v;
+            }
+            if (min === Infinity) { min=0; max=1; }
+            currentMin = min; 
+            currentMax = max;
+            minInput.value = min.toFixed(4);
+            maxInput.value = max.toFixed(4);
+        }
+
+        function updateVisuals() {
+            if (!masterMesh || !dataDensity) return;
+
+            const data = getCurrentDataArray();
+            const range = (currentMax - currentMin) || 1.0;
+            let visibleCount = 0;
+
+            for (let i = 0; i < elementCount; i++) {
+                const rho = dataDensity[i];
+                const rawVal = data[i]; 
+                const absVal = Math.abs(rawVal);
+                
+                const mOffset = i * 16;
+                const cOffset = i * 4;
+
+                let scale = 1.0;
+                if (rho < densityCutoff) {
+                    scale = 0.0;
+                } else {
+                    visibleCount++;
+                }
+
+                // Matrix
+                matrixBuffer[mOffset + 0] = scale;
+                matrixBuffer[mOffset + 1] = 0;
+                matrixBuffer[mOffset + 2] = 0;
+                matrixBuffer[mOffset + 3] = 0;
+
+                matrixBuffer[mOffset + 4] = 0;
+                matrixBuffer[mOffset + 5] = scale;
+                matrixBuffer[mOffset + 6] = 0;
+                matrixBuffer[mOffset + 7] = 0;
+
+                matrixBuffer[mOffset + 8] = 0;
+                matrixBuffer[mOffset + 9] = 0;
+                matrixBuffer[mOffset + 10] = scale;
+                matrixBuffer[mOffset + 11] = 0;
+
+                matrixBuffer[mOffset + 12] = centroids[i*3];
+                matrixBuffer[mOffset + 13] = centroids[i*3+1];
+                matrixBuffer[mOffset + 14] = centroids[i*3+2];
+                matrixBuffer[mOffset + 15] = 1;
+
+                // Color Calculation
+                if (scale > 0) {
+                    let norm = (absVal - currentMin) / range;
+                    if(norm < 0) norm = 0; if(norm > 1) norm = 1;
+                    
+                    if (currentField === 'ten_comp') {
+                        // Tension / Compression Mode
+                        // Raw Value > 0: Tension (Red)
+                        // Raw Value < 0: Compression (Blue)
+                        if (rawVal >= 0) {
+                            // RED Intensity proportional to norm
+                            // Using full saturation, just scaling magnitude
+                            colorBuffer[cOffset + 0] = norm; // R
+                            colorBuffer[cOffset + 1] = 0;    // G
+                            colorBuffer[cOffset + 2] = 0;    // B
+                        } else {
+                            // BLUE Intensity proportional to norm
+                            colorBuffer[cOffset + 0] = 0;    // R
+                            colorBuffer[cOffset + 1] = 0;    // G
+                            colorBuffer[cOffset + 2] = norm; // B
+                        }
+                    } else {
+                        // Standard Heatmap (Density or L1 Abs)
+                        const h = (1.0 - norm) * 240;
+                        const c = BABYLON.Color3.FromHSV(h, 0.9, 1.0);
+                        colorBuffer[cOffset + 0] = c.r;
+                        colorBuffer[cOffset + 1] = c.g;
+                        colorBuffer[cOffset + 2] = c.b;
+                    }
+                    colorBuffer[cOffset + 3] = 1.0;
+                }
+            }
+
+            masterMesh.thinInstanceSetBuffer("matrix", matrixBuffer, 16, true);
+            masterMesh.thinInstanceSetBuffer("color", colorBuffer, 4, true);
+            statVisible.textContent = visibleCount.toLocaleString();
+        }
+
+        applyButton.addEventListener('click', () => {
+            currentMin = parseFloat(minInput.value);
+            currentMax = parseFloat(maxInput.value);
+            updateVisuals();
+        });
+
+        autoRangeBtn.addEventListener('click', () => {
+            autoRange();
+            updateVisuals();
+        });
+
+        dataFieldSelect.addEventListener('change', (e) => {
+            currentField = e.target.value;
+            autoRange();
+            updateVisuals();
+        });
+
+        densitySlider.addEventListener('input', (e) => {
+            densityCutoff = parseFloat(e.target.value);
+            densityValue.textContent = densityCutoff.toFixed(2);
+            updateVisuals();
+        });
+
+        shadowToggle.addEventListener('change', (e) => {
+            if(e.target.checked) {
+                if(!shadowGenerator && directionLight) {
+                    shadowGenerator = new BABYLON.ShadowGenerator(2048, directionLight);
+                    shadowGenerator.useBlurExponentialShadowMap = true;
+                    if(masterMesh) shadowGenerator.addShadowCaster(masterMesh, true);
+                }
+            } else {
+                if(shadowGenerator) {
+                    shadowGenerator.dispose();
+                    shadowGenerator = null;
+                }
+            }
+        });
+
+        backgroundToggle.addEventListener('change', (e) => {
+            scene.clearColor = e.target.checked ? new BABYLON.Color4(1,1,1,1) : new BABYLON.Color4(0.08,0.08,0.1,1);
+        });
+
+        groundToggle.addEventListener('change', (e) => {
+            if(ground) ground.isVisible = e.target.checked;
+        });
+
+        window.addEventListener('DOMContentLoaded', initBabylon);
+    </script>
+</body>
+</html>

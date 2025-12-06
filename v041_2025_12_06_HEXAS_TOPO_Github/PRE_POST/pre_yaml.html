@@ -1,0 +1,671 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <title>FEM Visualization & Configurator</title>
+    <style>
+        /* Tailwind-inspired aesthetics */
+        html, body {
+            width: 100%; height: 100%;
+            margin: 0; overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f7f7;
+        }
+        #renderCanvas {
+            width: 100%; height: 100%;
+            touch-action: none;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 10;
+            background: rgba(255,255,255,0.95);
+            padding: 15px;
+            border-radius: 8px;
+            max-width: 320px;
+            max-height: 95vh;
+            overflow-y: auto;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+            border: 1px solid #e0e0e0;
+        }
+        .legend {
+            display: flex;
+            align-items: center;
+            margin-bottom: 5px;
+            font-size: 14px;
+            color: #4b5563;
+        }
+        .color-box {
+            width: 15px;
+            height: 15px;
+            margin-right: 8px;
+            display: inline-block;
+            border-radius: 3px;
+            border: 1px solid rgba(0,0,0,0.1);
+        }
+        
+        #controls label {
+            display: block;
+            margin-top: 10px;
+            font-size: 14px;
+            font-weight: 600;
+            color: #1f2937;
+        }
+        .config-input {
+            width: 100%;
+            padding: 8px;
+            box-sizing: border-box;
+            border: 1px solid #d1d5db;
+            border-radius: 4px;
+            margin-top: 4px;
+            font-size: 14px;
+            transition: border-color 0.15s;
+        }
+        .config-input:focus {
+            border-color: #3b82f6;
+            outline: none;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+        }
+
+        #fileInput {
+            margin-top: 15px;
+            width: 100%;
+        }
+        .btn {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin-top: 10px;
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 15px;
+            font-weight: 700;
+            transition: background-color 0.2s;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        .btn:hover:not(:disabled) {
+            background-color: #2563eb;
+        }
+        .btn:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+        #instructions {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #6b7280;
+            padding: 8px;
+            border-left: 4px solid #3b82f6;
+            background-color: #eff6ff;
+            border-radius: 4px;
+        }
+        #objectInfo {
+            margin-top: 10px;
+            padding: 10px;
+            background-color: #f3f4f6;
+            border-radius: 4px;
+            font-size: 12px;
+            white-space: pre-line;
+            border: 1px solid #e5e7eb;
+        }
+        hr {
+            margin: 15px 0;
+            border: 0;
+            border-top: 1px solid #e5e7eb;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="controls">
+    <h3>⚙ FEM Opt Configurator</h3>
+    <h4>Legend</h4>
+    <div class="legend">
+        <div class="color-box" style="background-color: blue; opacity: 0.5;"></div>
+        <span>Add Geometry (Blue)</span>
+    </div>
+    <div class="legend">
+        <div class="color-box" style="background-color: red; opacity: 0.5;"></div>
+        <span>Remove Geometry (Red)</span>
+    </div>
+    <div class="legend">
+        <div class="color-box" style="background-color: #FFFF00; opacity: 1.0; border: 1px solid #999;"></div>
+        <span>Boundary Cond. (Yellow)</span>
+    </div>
+    <div class="legend">
+        <div class="color-box" style="background-color: white; border: 1px solid #999;"></div>
+        <span>External Forces (White)</span>
+    </div>
+    <div class="legend">
+        <div class="color-box" style="background-color: yellow; opacity: 0.2; border: 1px solid #ccc;"></div>
+        <span>Design Domain</span>
+    </div>
+
+    <hr/>
+
+    <label for="iterationsInput">Optimization Iterations:</label>
+    <input type="number" id="iterationsInput" class="config-input" value="0" min="0" step="1">
+    
+    <label for="stressInput">L1 Stress Allowable:</label>
+    <input type="number" id="stressInput" class="config-input" value="1.0" step="0.01">
+    
+    <hr/>
+
+    <input type="file" id="fileInput" accept=".yaml, .yml" />
+    <div id="instructions">Load a .yaml file to begin.</div>
+    
+    <div id="objectInfo">No object selected</div>
+    
+    <button id="downloadBtn" class="btn" disabled>Download Modified Config (.yaml)</button>
+</div>
+
+<canvas id="renderCanvas"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babylonjs/6.16.0/babylon.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babylonjs-gui/6.16.0/babylonjs.gui.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+<script>
+    // ====================================================================
+    // 1. CONSTANTS & COMMENTS CONFIGURATION
+    // ====================================================================
+    
+    const HEADER_TEXT = 
+`# ==============================================================================
+# HEXA FEM TOPOLOGY OPTIMIZATION CONFIGURATION
+# ==============================================================================
+# This file controls the geometry generation, boundary conditions, loads, 
+# material properties, and solver settings for the topology optimization process.
+# ==============================================================================`;
+
+    const YAML_COMMENTS = {
+        "geometry": {
+            "_header": "# ------------------------------------------------------------------------------\n# 1. GEOMETRY DEFINITION\n# ------------------------------------------------------------------------------\n# Defines the bounding box of the domain and specific geometric shapes \n# to manually add (solid) or remove (void) material before optimization starts.",
+            "length_x": "# Domain dimension in the X direction (meters).",
+            "length_y": "# Domain dimension in the Y direction (meters).",
+            "length_z": "# Domain dimension in the Z direction (meters).",
+            "target_elem_count": "# Target total number of elements. The mesh generator calculates N_x, N_y, N_z based on dimension ratios.",
+            "shape_notes": "# Shapes define fixed regions (void or solid) that are excluded from optimization.",
+            "type": "# Geometric type: 'sphere' or 'box'.",
+            "center": "# Center coordinates [x, y, z]",
+            "diameter": "# Diameter of the sphere.",
+            "side": "# Side length of the cube/box.",
+            "action": "# Fixed density type: 'remove' (min_density) or 'add' (max_density_initial_add)."
+        },
+        "boundary_conditions": {
+            "_header": "# ------------------------------------------------------------------------------\n# 2. BOUNDARY CONDITIONS (Fixed Displacements)\n# ------------------------------------------------------------------------------\n# Defines which nodes are constrained.\n# location format: [x, y, z]\n#   - Specific number: Matches nodes at that coordinate (within tolerance).\n#   - String ':':      Wildcard (matches all nodes in that axis).\n#   - String 'X%':     Relative position (e.g., '100%' = max dimension).\n# DoFs: [1, 2, 3] where 1=X, 2=Y, 3=Z translation.",
+        },
+        "external_forces": {
+            "_header": "# ------------------------------------------------------------------------------\n# 3. EXTERNAL FORCES (Loads)\n# ------------------------------------------------------------------------------\n# Defines forces applied to the structure.\n# name:     Optional label for logging.\n# location: Coordinate [x, y, z] to apply force. If no exact node exists, \n#           it maps to the nearest node.\n# F:        Force vector [Fx, Fy, Fz].",
+        },
+        "material": {
+            "_header": "# ------------------------------------------------------------------------------\n# 4. MATERIAL PROPERTIES\n# ------------------------------------------------------------------------------\n# Linear elastic isotropic material properties.",
+            "E": "# Young's Modulus (base value).",
+            "nu": "# Poisson's Ratio."
+        },
+        "optimization_parameters": {
+             "_header": "# ------------------------------------------------------------------------------\n# 5. OPTIMIZATION SETTINGS\n# ------------------------------------------------------------------------------",
+             "min_density": "# Minimum allowable element density (rho_min). Higher values increase stability but introduce 'gray' elements. Recommended: 0.001 to 0.01.",
+             "max_density_initial_add": "# Initial density for 'add' shapes (controls initial fixed stiffness). Typically >= 1.0.",
+             "density_clamp_max": "# Maximum value for element density. Usually 1.0.",
+             "filter_R_init_perc": "# Initial filter radius %",
+             "filter_R_interm_perc": "# Intermediate filter radius %",
+             "filter_R_final_perc": "# Final filter radius %",
+             "filter_R_interm_iter_perc": "# At what % of iterations to switch to final radius",
+             "filter_radius": "# Manual override for filter radius (0 = use percentage logic above)."
+        },
+        "output_settings": {
+            "_header": "# ------------------------------------------------------------------------------\n# 6. OUTPUT SETTINGS\n# ------------------------------------------------------------------------------",
+            "export_frequency": "# Save VTK/STL every N iterations",
+            "log_filename": "",
+            "iso_surface_threshold": "# Density threshold for generating the STL isosurface"
+        },
+        "solver_parameters": {
+            "_header": "# ------------------------------------------------------------------------------\n# 7. SOLVER PARAMETERS\n# ------------------------------------------------------------------------------\n# Controls the Finite Element Analysis (FEA) solver.",
+            "solver_type": "# Options: 'direct', 'matrix_free', or 'gpu'.",
+            "tolerance": "# Convergence tolerance for the iterative solver (residual norm).",
+            "max_iterations": "# Maximum number of iterations allowed for the chosen iterative solver (CG/Krylov).",
+            "diagonal_shift_factor": "# Regularization factor (delta) applied as a fraction of max diagonal element.",
+            "gpu_method": "# 'native' (CUDA CG) or 'krylov' (Krylov.jl wrapper)",
+            "krylov_solver": "# 'cg', 'minres', or 'bicgstab'"
+        },
+        "number_of_iterations": "# Number of optimization iterations. Set to 0 for a single FEM analysis run.",
+        "l1_stress_allowable": "# Target maximum allowable L1 stress norm (constraint value)."
+    };
+
+    // ====================================================================
+    // 2. BABYLON.JS SCENE SETUP
+    // ====================================================================
+
+    const objectInfoDiv = document.getElementById("objectInfo");
+    const downloadBtn = document.getElementById("downloadBtn");
+    const iterationsInput = document.getElementById('iterationsInput');
+    const stressInput = document.getElementById('stressInput');
+
+    var canvas = document.getElementById("renderCanvas");
+    var engine = new BABYLON.Engine(canvas, true);
+    var scene = new BABYLON.Scene(engine);
+
+    var camera = new BABYLON.ArcRotateCamera("Camera", -Math.PI/2, Math.PI/2.5, 50, BABYLON.Vector3.Zero(), scene);
+    camera.attachControl(canvas, true);
+    camera.wheelPrecision = 50; 
+    camera.lowerBetaLimit = 0.01;
+    camera.upperBetaLimit = Math.PI - 0.01;
+
+    var light = new BABYLON.HemisphericLight("light", new BABYLON.Vector3(0, 1, 0), scene);
+    light.intensity = 0.7;
+    var dirLight = new BABYLON.DirectionalLight("dirLight", new BABYLON.Vector3(-1, -2, -1), scene);
+    dirLight.intensity = 0.5;
+
+    var gizmoManager = new BABYLON.GizmoManager(scene);
+    gizmoManager.positionGizmoEnabled = true;
+    gizmoManager.attachableMeshes = [];
+    gizmoManager.usePointerToAttachGizmos = false;
+
+    var meshToConfigMap = new Map();
+    var currentConfig = null;
+    
+    function clearScene() {
+        scene.meshes.slice().forEach(m => {
+            if (m.name !== "Camera" && m.name !== "light" && m.name !== "dirLight") {
+                m.dispose();
+            }
+        });
+        gizmoManager.attachableMeshes = [];
+        gizmoManager.attachToMesh(null);
+        meshToConfigMap.clear();
+        objectInfoDiv.textContent = "No object selected";
+        iterationsInput.value = 0;
+        stressInput.value = 1.0;
+        downloadBtn.disabled = true;
+    }
+
+    function createCoordinateAxes(size) {
+        var axisX = BABYLON.MeshBuilder.CreateLines("axisX", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(size, 0, 0)] }, scene);
+        axisX.color = new BABYLON.Color3(1, 0, 0);
+        var axisY = BABYLON.MeshBuilder.CreateLines("axisY", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, size, 0)] }, scene);
+        axisY.color = new BABYLON.Color3(0, 1, 0);
+        var axisZ = BABYLON.MeshBuilder.CreateLines("axisZ", { points: [BABYLON.Vector3.Zero(), new BABYLON.Vector3(0, 0, -size)] }, scene);
+        axisZ.color = new BABYLON.Color3(0, 0, 1);
+        
+        // Removed the blue plane "Z label hack" here
+    }
+
+    function createArrow(name, start, dir, length, color, thickness=0.3) {
+        var shaftLen = length * 0.8;
+        var tipLen = length * 0.2;
+        
+        var shaft = BABYLON.MeshBuilder.CreateCylinder(name + "_shaft", {height: shaftLen, diameter: thickness}, scene);
+        shaft.position = start.add(dir.scale(shaftLen / 2));
+        
+        var tip = BABYLON.MeshBuilder.CreateCylinder(name + "_tip", {height: tipLen, diameterTop: 0, diameterBottom: thickness * 2.5}, scene);
+        tip.position = start.add(dir.scale(shaftLen + tipLen / 2));
+        
+        var up = new BABYLON.Vector3(0, 1, 0);
+        var axis = BABYLON.Vector3.Cross(up, dir);
+        var angle = Math.acos(BABYLON.Vector3.Dot(up, dir));
+        
+        if (axis.length() < 1e-5) {
+             if (dir.y < 0) angle = Math.PI;
+             else angle = 0;
+             axis = new BABYLON.Vector3(1,0,0);
+        }
+        
+        var quat = BABYLON.Quaternion.RotationAxis(axis, angle);
+        shaft.rotationQuaternion = quat;
+        tip.rotationQuaternion = quat;
+        
+        var mat = new BABYLON.StandardMaterial(name + "_mat", scene);
+        mat.diffuseColor = color;
+        mat.emissiveColor = color;
+        shaft.material = mat;
+        tip.material = mat;
+        
+        return BABYLON.Mesh.MergeMeshes([shaft, tip], true, true, undefined, false, true);
+    }
+
+    // ====================================================================
+    // 3. SCENE BUILDING LOGIC
+    // ====================================================================
+
+    function interpretLocationComponent(spec, cmin, cmax) {
+        if (spec === ":") return null; 
+        if (typeof spec === "number") {
+            return spec;
+        }
+        if (typeof spec === "string" && spec.trim().endsWith("%")) {
+            var frac = parseFloat(spec.replace("%",""))/100;
+            frac = Math.min(Math.max(frac,0),1);
+            return cmin + frac*(cmax - cmin);
+        }
+        return spec; 
+    }
+
+    function expandCoords(spec, min, max, step) {
+        if (spec === ":") {
+            let res = [];
+            for (let v = min; v <= max + 0.001; v += step) res.push(v);
+            return res;
+        }
+        return [interpretLocationComponent(spec, min, max)];
+    }
+
+    function buildScene(config) {
+        clearScene();
+        currentConfig = JSON.parse(JSON.stringify(config));
+
+        iterationsInput.value = currentConfig.number_of_iterations || 0;
+        stressInput.value = currentConfig.l1_stress_allowable || 1.0;
+        downloadBtn.disabled = false;
+
+        if (!config.geometry) { console.error("No geometry in config"); return; }
+
+        const g = config.geometry;
+        const xLen = g.length_x || 20;
+        const yLen = g.length_y || 10;
+        const zLen = g.length_z || 10;
+        
+        // 1. Domain (Transparent Box)
+        const domainBox = BABYLON.MeshBuilder.CreateBox("Domain", { width: xLen, height: yLen, depth: zLen }, scene);
+        domainBox.position = new BABYLON.Vector3(xLen/2, yLen/2, -zLen/2);
+        domainBox.isPickable = false;
+        
+        const domainMat = new BABYLON.StandardMaterial("dMat", scene);
+        domainMat.diffuseColor = new BABYLON.Color3(1, 1, 0); // Yellowish
+        domainMat.alpha = 0.2; // Transparency
+        domainMat.backFaceCulling = false; 
+        domainBox.material = domainMat;
+        
+        createCoordinateAxes(Math.max(xLen, yLen, zLen) * 0.2);
+        camera.target = domainBox.position.clone();
+        camera.radius = Math.max(xLen, yLen, zLen) * 2.0;
+
+        // 2. Shapes
+        Object.keys(g).forEach(key => {
+            if (['length_x','length_y','length_z','target_elem_count','shape_notes'].includes(key)) return;
+            const shape = g[key];
+            if (!shape || !shape.type) return;
+
+            let mesh;
+            if (!shape.center || shape.center.length < 3) return;
+            const pos = new BABYLON.Vector3(shape.center[0], shape.center[1], -shape.center[2]);
+            
+            if (shape.type === 'sphere') {
+                mesh = BABYLON.MeshBuilder.CreateSphere(key, { diameter: shape.diameter }, scene);
+            } else if (shape.type === 'box') {
+                mesh = BABYLON.MeshBuilder.CreateBox(key, { width: shape.side, height: shape.side, depth: shape.side }, scene);
+            }
+            
+            if (mesh) {
+                mesh.position = pos;
+                const mat = new BABYLON.StandardMaterial(key + "Mat", scene);
+                mat.alpha = 0.6;
+                mat.diffuseColor = (shape.action === 'add') ? new BABYLON.Color3(0, 0, 1) : new BABYLON.Color3(1, 0, 0);
+                mesh.material = mat;
+                gizmoManager.attachableMeshes.push(mesh);
+                meshToConfigMap.set(mesh.name, { key: key, type: shape.type });
+            }
+        });
+
+        // 3. Boundary Conditions
+        const vizStep = Math.max(xLen, yLen, zLen) / 25; 
+
+        if (config.boundary_conditions) {
+            config.boundary_conditions.forEach((bc, idx) => {
+                if (!bc.location || bc.location.length < 3) return;
+
+                const xs = expandCoords(bc.location[0], 0, xLen, vizStep);
+                const ys = expandCoords(bc.location[1], 0, yLen, vizStep);
+                const zs = expandCoords(bc.location[2], 0, zLen, vizStep);
+
+                xs.forEach((x, xi) => {
+                    ys.forEach((y, yi) => {
+                        zs.forEach((z, zi) => {
+                            const pos = new BABYLON.Vector3(x, y, -z);
+                            const uid = `${idx}_${xi}_${yi}_${zi}`;
+                            
+                            // Sphere -> Yellow, Smaller
+                            const m = BABYLON.MeshBuilder.CreateSphere("bc_" + uid, {diameter: vizStep * 0.25}, scene);
+                            m.position = pos;
+                            const mat = new BABYLON.StandardMaterial("bcMat", scene);
+                            mat.diffuseColor = new BABYLON.Color3(1, 1, 0); // Yellow
+                            m.material = mat;
+
+                            if (bc.DoFs) {
+                                bc.DoFs.forEach(dof => {
+                                    let dir = BABYLON.Vector3.Zero();
+                                    let arrowColor = new BABYLON.Color3(1, 1, 1);
+
+                                    // Color by Axis: 1=X=Red, 2=Y=Green, 3=Z=Blue
+                                    if(dof===1) { 
+                                        dir = new BABYLON.Vector3(1,0,0);
+                                        arrowColor = new BABYLON.Color3(1, 0, 0); 
+                                    }
+                                    if(dof===2) { 
+                                        dir = new BABYLON.Vector3(0,1,0); 
+                                        arrowColor = new BABYLON.Color3(0, 1, 0); 
+                                    }
+                                    if(dof===3) { 
+                                        dir = new BABYLON.Vector3(0,0,1); 
+                                        arrowColor = new BABYLON.Color3(0, 0, 1); 
+                                    }
+                                    
+                                    // Smaller Arrows
+                                    createArrow("bcArrow_"+uid+"_"+dof, pos, dir, vizStep * 0.8, arrowColor, vizStep*0.08);
+                                });
+                            }
+                        });
+                    });
+                });
+            });
+        }
+
+        // 4. Forces
+        if (config.external_forces) {
+            config.external_forces.forEach((f, idx) => {
+                if (!f.location || f.location.length < 3) return;
+                const loc = f.location;
+                
+                let fx = interpretLocationComponent(loc[0], 0, xLen);
+                let fy = interpretLocationComponent(loc[1], 0, yLen);
+                let fz = interpretLocationComponent(loc[2], 0, zLen);
+                
+                const pos = new BABYLON.Vector3(fx, fy, -fz);
+                const forceVec = new BABYLON.Vector3(f.F[0], f.F[1], -f.F[2]); 
+                const magnitude = forceVec.length();
+                
+                if (magnitude > 1e-5) {
+                    const dir = forceVec.normalize();
+                    const arrowLen = Math.max(xLen, yLen, zLen) * 0.15;
+                    
+                    createArrow("Force_"+idx, pos, dir, arrowLen, new BABYLON.Color3(1,1,1), arrowLen * 0.05);
+                    
+                    // Text Label
+                    var dt = new BABYLON.DynamicTexture("fText"+idx, {width: 256, height: 128}, scene);
+                    dt.hasAlpha = true;
+                    dt.drawText(`F: [${f.F.join(',')}]`, null, 80, "bold 36px Arial", "white", "transparent");
+                    
+                    var plane = BABYLON.MeshBuilder.CreatePlane("fLabel"+idx, {width: arrowLen, height: arrowLen/2}, scene);
+                    plane.position = pos.add(dir.scale(arrowLen * 1.2));
+                    plane.billboardMode = BABYLON.Mesh.BILLBOARDMODE_ALL;
+                    var pMat = new BABYLON.StandardMaterial("pMat"+idx, scene);
+                    pMat.diffuseTexture = dt;
+                    pMat.emissiveColor = new BABYLON.Color3(1,1,1);
+                    pMat.disableLighting = true;
+                    plane.material = pMat;
+                }
+            });
+        }
+    }
+
+    // Update config from Scene Changes
+    function updateConfigFromScene() {
+        if (!currentConfig) return null;
+        
+        scene.meshes.forEach(m => {
+            const info = meshToConfigMap.get(m.name);
+            if (info) {
+                const c = currentConfig.geometry[info.key];
+                c.center = [m.position.x, m.position.y, -m.position.z];
+            }
+        });
+
+        currentConfig.number_of_iterations = parseInt(iterationsInput.value);
+        currentConfig.l1_stress_allowable = parseFloat(stressInput.value);
+
+        return currentConfig;
+    }
+
+    // ====================================================================
+    // 4. YAML GENERATION
+    // ====================================================================
+
+    function compactVectors(yamlStr) {
+        let res = yamlStr.replace(
+            /(location|center|F):\s*\n\s+-\s+([^\n]+)\n\s+-\s+([^\n]+)\n\s+-\s+([^\n]+)/g, 
+            "$1: [$2, $3, $4]"
+        );
+        res = res.replace(
+            /DoFs:\s*\n\s+-\s+([^\n]+)\n\s+-\s+([^\n]+)\n\s+-\s+([^\n]+)/g,
+            "DoFs: [$1, $2, $3]"
+        );
+        res = res.replace(
+            /DoFs:\s*\n\s+-\s+([^\n]+)\n\s+-\s+([^\n]+)/g,
+            "DoFs: [$1, $2]"
+        );
+         res = res.replace(
+            /DoFs:\s*\n\s+-\s+([^\n]+)/g,
+            "DoFs: [$1]"
+        );
+        return res;
+    }
+
+    function injectComments(yamlStr) {
+        let lines = yamlStr.split('\n');
+        let newLines = [HEADER_TEXT, ""];
+        const isKey = (line, key) => line.trim().startsWith(key + ":");
+
+        for (let i = 0; i < lines.length; i++) {
+            let line = lines[i];
+            let trim = line.trim();
+            
+            // Sections
+            if (isKey(line, "geometry")) { newLines.push(YAML_COMMENTS.geometry._header); newLines.push(line); continue; }
+            if (isKey(line, "boundary_conditions")) { newLines.push("\n"+YAML_COMMENTS.boundary_conditions._header); newLines.push(line); continue; }
+            if (isKey(line, "external_forces")) { newLines.push("\n"+YAML_COMMENTS.external_forces._header); newLines.push(line); continue; }
+            if (isKey(line, "material")) { newLines.push("\n"+YAML_COMMENTS.material._header); newLines.push(line); continue; }
+            if (isKey(line, "optimization_parameters")) { newLines.push("\n"+YAML_COMMENTS.optimization_parameters._header); newLines.push(line); continue; }
+            if (isKey(line, "output_settings")) { newLines.push("\n"+YAML_COMMENTS.output_settings._header); newLines.push(line); continue; }
+            if (isKey(line, "solver_parameters")) { newLines.push("\n"+YAML_COMMENTS.solver_parameters._header); newLines.push(line); continue; }
+
+            // Inline comments
+            if (trim.startsWith("length_x:")) line += " " + YAML_COMMENTS.geometry.length_x;
+            else if (trim.startsWith("length_y:")) line += " " + YAML_COMMENTS.geometry.length_y;
+            else if (trim.startsWith("length_z:")) line += " " + YAML_COMMENTS.geometry.length_z;
+            else if (trim.startsWith("target_elem_count:")) line += " " + YAML_COMMENTS.geometry.target_elem_count;
+            else if (trim.startsWith("shape_notes:")) line += " " + YAML_COMMENTS.geometry.shape_notes;
+            else if (line.includes("  type:")) line += " " + YAML_COMMENTS.geometry.type;
+            else if (line.includes("  center: [")) line += " " + YAML_COMMENTS.geometry.center;
+            else if (line.includes("  diameter:")) line += " " + YAML_COMMENTS.geometry.diameter;
+            else if (line.includes("  side:")) line += " " + YAML_COMMENTS.geometry.side;
+            else if (line.includes("  action:")) line += " " + YAML_COMMENTS.geometry.action;
+
+            else if (trim.startsWith("E:")) line += " " + YAML_COMMENTS.material.E;
+            else if (trim.startsWith("nu:")) line += " " + YAML_COMMENTS.material.nu;
+
+            else if (trim.startsWith("min_density:")) line += " " + YAML_COMMENTS.optimization_parameters.min_density;
+            else if (trim.startsWith("max_density_initial_add:")) line += " " + YAML_COMMENTS.optimization_parameters.max_density_initial_add;
+            else if (trim.startsWith("density_clamp_max:")) line += " " + YAML_COMMENTS.optimization_parameters.density_clamp_max;
+            else if (trim.startsWith("filter_R_init_perc:")) line += " " + YAML_COMMENTS.optimization_parameters.filter_R_init_perc;
+            else if (trim.startsWith("filter_R_interm_perc:")) line += " " + YAML_COMMENTS.optimization_parameters.filter_R_interm_perc;
+            else if (trim.startsWith("filter_R_final_perc:")) line += " " + YAML_COMMENTS.optimization_parameters.filter_R_final_perc;
+            else if (trim.startsWith("filter_R_interm_iter_perc:")) line += " " + YAML_COMMENTS.optimization_parameters.filter_R_interm_iter_perc;
+            else if (trim.startsWith("filter_radius:")) line += " " + YAML_COMMENTS.optimization_parameters.filter_radius;
+
+            else if (trim.startsWith("solver_type:")) line += " " + YAML_COMMENTS.solver_parameters.solver_type;
+            else if (trim.startsWith("tolerance:")) line += " " + YAML_COMMENTS.solver_parameters.tolerance;
+            else if (trim.startsWith("max_iterations:")) line += " " + YAML_COMMENTS.solver_parameters.max_iterations;
+            else if (trim.startsWith("diagonal_shift_factor:")) line += " " + YAML_COMMENTS.solver_parameters.diagonal_shift_factor;
+            else if (trim.startsWith("gpu_method:")) line += " " + YAML_COMMENTS.solver_parameters.gpu_method;
+            else if (trim.startsWith("krylov_solver:")) line += " " + YAML_COMMENTS.solver_parameters.krylov_solver;
+
+            else if (trim.startsWith("export_frequency:")) line += " " + YAML_COMMENTS.output_settings.export_frequency;
+            else if (trim.startsWith("iso_surface_threshold:")) line += " " + YAML_COMMENTS.output_settings.iso_surface_threshold;
+
+            else if (trim.startsWith("number_of_iterations:")) { newLines.push(""); line += " " + YAML_COMMENTS.number_of_iterations; }
+            else if (trim.startsWith("l1_stress_allowable:")) line += " " + YAML_COMMENTS.l1_stress_allowable;
+
+            newLines.push(line);
+        }
+        return newLines.join('\n');
+    }
+
+    function downloadConfig() {
+        const updated = updateConfigFromScene();
+        if (!updated) { alert("No config loaded!"); return; }
+        let yaml = jsyaml.dump(updated, { indent: 2, lineWidth: -1, sortKeys: false });
+        yaml = compactVectors(yaml);
+        yaml = injectComments(yaml);
+        const blob = new Blob([yaml], {type: "application/x-yaml"});
+        saveAs(blob, "modified_config.yaml");
+    }
+
+    // ====================================================================
+    // 5. EVENT LISTENERS
+    // ====================================================================
+
+    downloadBtn.addEventListener("click", downloadConfig);
+    iterationsInput.addEventListener("change", updateConfigFromScene);
+    stressInput.addEventListener("change", updateConfigFromScene);
+
+    document.getElementById("fileInput").addEventListener("change", function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+        var reader = new FileReader();
+        reader.onload = function(ev) {
+            try {
+                var config = jsyaml.load(ev.target.result);
+                buildScene(config);
+                document.getElementById("instructions").innerHTML = "<b>File Loaded!</b><br>1. Select shapes (Red/Blue) to move.<br>2. Modify params.<br>3. Download.";
+            } catch(err) {
+                alert("Error parsing YAML: " + err.message);
+            }
+        };
+        reader.readAsText(file);
+    });
+
+    scene.onPointerDown = function(evt, pickResult) {
+        if (pickResult.hit && pickResult.pickedMesh && meshToConfigMap.has(pickResult.pickedMesh.name)) {
+            const mesh = pickResult.pickedMesh;
+            gizmoManager.attachToMesh(mesh);
+            const info = meshToConfigMap.get(mesh.name);
+            const data = currentConfig.geometry[info.key];
+            let html = `<b>Selected: ${info.key}</b><br>Type: ${info.type}<br>Action: ${data.action}<br>Center: [${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)}, ${(-mesh.position.z).toFixed(2)}]`;
+            objectInfoDiv.innerHTML = html;
+        } else {
+            gizmoManager.attachToMesh(null);
+            objectInfoDiv.textContent = "No object selected";
+        }
+    };
+
+    gizmoManager.gizmos.positionGizmo.onDragEndObservable.add(() => {
+        updateConfigFromScene();
+        if (gizmoManager.gizmos.positionGizmo.attachedMesh) {
+             const mesh = gizmoManager.gizmos.positionGizmo.attachedMesh;
+             const info = meshToConfigMap.get(mesh.name);
+             if(info) {
+                 objectInfoDiv.innerHTML = `<b>Selected: ${info.key}</b><br>Type: ${info.type}<br>Action: ${currentConfig.geometry[info.key].action}<br>Center: [${mesh.position.x.toFixed(2)}, ${mesh.position.y.toFixed(2)}, ${(-mesh.position.z).toFixed(2)}]`;
+             }
+        }
+    });
+
+    engine.runRenderLoop(function() { scene.render(); });
+    window.addEventListener("resize", function() { engine.resize(); });
+</script>
+</body>
+</html>

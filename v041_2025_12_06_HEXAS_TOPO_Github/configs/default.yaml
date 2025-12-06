@@ -1,0 +1,116 @@
+# ==============================================================================
+# HEXA FEM TOPOLOGY OPTIMIZATION CONFIGURATION
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. GEOMETRY DEFINITION
+# ------------------------------------------------------------------------------
+geometry:
+  length_x: 60
+  length_y: 20
+  length_z: 20
+  
+  # Initial element count. The solver will maintain approximately this many 
+  # ACTIVE elements during the nominal phase (by upscaling as material is removed).
+  target_elem_count: 14_000
+  
+  sphere1:
+    type: sphere
+    center: [12.51, 28.49, -12.13]
+    diameter: 8
+    action: remove
+  sphere2:
+    type: sphere
+    center: [60.38, -0.07, 9.76]
+    diameter: 4
+    action: add
+  sphere3:
+    type: sphere
+    center: [34.29, 5, 2.43]
+    diameter: 4
+    action: remove
+  box1:
+    type: box
+    center: [28, 7, -9.61]
+    side: 2
+    action: add
+  box2:
+    type: box
+    center: [45.06, 8.95, 1.09]
+    side: 4
+    action: remove
+
+# ------------------------------------------------------------------------------
+# 2. BOUNDARY CONDITIONS
+# ------------------------------------------------------------------------------
+boundary_conditions:
+  - location: [0, ':', ':']
+    DoFs: [1, 2, 3]
+
+# ------------------------------------------------------------------------------
+# 3. EXTERNAL FORCES
+# ------------------------------------------------------------------------------
+external_forces:
+  - name: Load Case 1
+    location: [100%, 0, 0]
+    F: [0, 10, 0]
+  - name: Load Case 2
+    location: [100%, 0, 50%]
+    F: [0, 0, -10]
+  - name: Load Case 3
+    location: [100%, 0, 100%]
+    F: [0, 20, 0]
+  - name: Load Case 4
+    location: [50%, 0, 50%]
+    F: [0, 20, 0]
+
+# ------------------------------------------------------------------------------
+# 4. MATERIAL PROPERTIES
+# ------------------------------------------------------------------------------
+material:
+  E: 1
+  nu: 0.3
+
+# ------------------------------------------------------------------------------
+# 5. OPTIMIZATION SETTINGS
+# ------------------------------------------------------------------------------
+number_of_iterations: 30
+l1_stress_allowable: 2.1
+
+optimization_parameters:
+  min_density: 0.0001
+  max_density_initial_add: 10
+  density_clamp_max: 1
+  filter_R_init_perc: 1
+  filter_R_interm_perc: 1
+  filter_R_final_perc: 0.1
+  filter_R_interm_iter_perc: 80
+  filter_radius: 0
+
+# ------------------------------------------------------------------------------
+# 6. OUTPUT SETTINGS
+# ------------------------------------------------------------------------------
+output_settings:
+  export_frequency: 1
+  # Log filename (will be saved in PROJECT_ROOT)
+  log_filename: simulation_log.txt
+  iso_surface_threshold: 0.9
+
+# ------------------------------------------------------------------------------
+# 7. SOLVER PARAMETERS
+# ------------------------------------------------------------------------------
+solver_parameters:
+  solver_type: gpu
+  tolerance: 1.e-9
+  max_iterations: 40000
+  diagonal_shift_factor: 1.e-9
+  gpu_method: krylov
+  krylov_solver: cg
+
+# GROWTH SETTINGS
+# ----------------
+# Phase 1 (1 to number_of_iterations): Keep active elements approx. equal to initial target_elem_count.
+# Phase 2 (Next growth_phase_steps): Ramp active elements up to target_active_elements.
+# Phase 3 (Annealing): Refine final shape.
+target_active_elements: 14_000
+growth_phase_steps: 10
